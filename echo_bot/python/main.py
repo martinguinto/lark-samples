@@ -1,31 +1,46 @@
 import lark_oapi as lark
 from lark_oapi.api.im.v1 import *
+from lark_oapi.api.contact.v3 import *
 import json
 
-# Global out-of-office flag
-IS_OUT = True  # Set to False when you're back
+# Set this to your Feishu email
+YOUR_EMAIL = "martin.guinto@example.com"  # Replace with your actual Feishu email
 
-# Your user ID or username
-YOUR_FEISHU_USERNAME = "martin.guinto"
+# Global flag for out-of-office mode
+IS_OUT = True
 
-# Register event handler
+# Placeholder for your Feishu user ID (will be fetched via API)
+YOUR_USER_ID = None
+
+
+def get_user_id_by_email(email: str) -> str:
+    """Fetch Feishu user ID by email"""
+    request = BatchGetIdRequest.builder().emails([email]).build()
+    response = client.contact.v3.user.batch_get_id(request)
+
+    if response.success() and response.data and email in response.data.email_users:
+        return response.data.email_users[email][0].user_id
+    else:
+        raise Exception(f"Failed to fetch user ID for {email}: {response.msg}")
+
+
 def do_p2_im_message_receive_v1(data: P2ImMessageReceiveV1) -> None:
-    if not IS_OUT:
-        return  # You're not out, don't auto-reply
+    if not IS_OUT or YOUR_USER_ID is None:
+        return
 
-    # Get sender and receiver info
-    sender_id = data.event.sender.sender_id.user_id
-    receiver_id = data.event.message.mentions[0].id.user_id if data.event.message.mentions else ""
-
-    # Prevent replying to yourself or wrong recipient
-    if data.event.sender.sender_id.union_id == data.event.message.sender_id.union_id:
-        return  # Do not respond to own messages
-
-    # Optional: check if this message is for you
+    # Check if message is p2p and sent to your chat
     if data.event.message.chat_type != "p2p":
-        return  # Only handle private messages
+        return
 
-    # Compose reply
+    # Skip messages not sent to you
+    if data.event.message.chat_id != YOUR_USER_ID:
+        return
+
+    # Skip responding to yourself
+    if data.event.sender.sender_id.user_id == YOUR_USER_ID:
+        return
+
+    # Compose auto-reply
     content = json.dumps({
         "text": "Hi, this is an automated message. Martin Guinto is currently unavailable or on leave. He will get back to you once he's back. Thank you!"
     })
@@ -50,6 +65,7 @@ def do_p2_im_message_receive_v1(data: P2ImMessageReceiveV1) -> None:
             f"client.im.v1.chat.create failed, code: {response.code}, msg: {response.msg}, log_id: {response.get_log_id()}"
         )
 
+
 # Register event handler
 event_handler = (
     lark.EventDispatcherHandler.builder("", "")
@@ -57,8 +73,10 @@ event_handler = (
     .build()
 )
 
-# Initialize Lark client and WebSocket
+# Initialize client
 client = lark.Client.builder().app_id(lark.APP_ID).app_secret(lark.APP_SECRET).build()
+
+# Initialize WebSocket
 wsClient = lark.ws.Client(
     lark.APP_ID,
     lark.APP_SECRET,
@@ -66,8 +84,14 @@ wsClient = lark.ws.Client(
     log_level=lark.LogLevel.DEBUG,
 )
 
+
 def main():
+    global YOUR_USER_ID
+    # Fetch your own user ID by email
+    YOUR_USER_ID = get_user_id_by_email(YOUR_EMAIL)
+    # Start WebSocket
     wsClient.start()
+
 
 if __name__ == "__main__":
     main()
